@@ -1,0 +1,515 @@
+#!/bin/bash
+
+if [[ "$(whoami)" != "root" ]]; then
+    fakeroot $0 $@
+    exit 0
+fi
+
+if [[ -z $MORPH_DIR ]]; then
+    MORPH_DIR=$(dirname $(readlink -f $0))
+fi
+
+if [[ -z $MORPH_DEBUG ]]; then
+    declare -i MORPH_DEBUG=1
+else
+    declare -i MORPH_DEBUG=$MORPH_DEBUG
+fi
+
+. $MORPH_DIR/morphrc
+
+declare -r maintainer_name=$maintainer_name
+declare -r maintainer_email=$maintainer_email
+
+declare -r build_date=$(date -u "+%s")
+
+. $MORPH_DIR/lib/debug
+
+trap "die Interrupted!" KILL HUP INT TERM
+
+validate () {
+    if [[ -z "$maintainer_name" ]]; then
+        die "maintainer_name not set in morphrc"
+    fi
+
+    if [[ -z "$maintainer_email" ]]; then
+        die "maintainer_email not set in morphrc"
+    fi
+
+    if [[ -z "$name" ]]; then
+        die "Package name is not set!"
+    fi
+    if [[ -z "$version" ]]; then
+        die "Version is not set!"
+    fi
+    if [[ -z "$mbuild" ]]; then
+        debug "Build is not set. Using build=1 by default"
+        mbuild=1
+    fi
+    if [[ -z "$arch" ]]; then
+        debug "Arch is not set. Using arch=any by default"
+        arch=auto
+    fi
+    if [[ -z "$description" ]]; then
+        die "Description is not set!"
+    fi
+    if [[ -z "$source" ]]; then        
+        warn "Source is not set. Is that what you really want?"
+    fi
+    if [[ -z "$tags" ]]; then
+        warn "Tags are not set. No one will find your package."
+    fi
+    if [[ -z "$depends" ]]; then
+        debug "No dependencies set, using automatic generation."
+    fi
+
+    if [[ -z $target_arch ]]; then
+        target_arch="$(uname -m)"
+    fi
+
+    if [[ "$arch" == "auto" ]]; then
+        arch=$target_arch
+    elif [[ "$arch" == "noarch" ]]; then
+        arch=any
+    else
+        for item in $arch; do
+            if [[ "$item" == "$target_arch" ]]; then
+                supported=1
+                break
+            fi
+        done
+        if [[ -z $supported ]]; then
+            die "Unsupported architecture: $target_arch"
+        fi
+    fi
+}
+
+init_global () {
+    if ! [ $tmproot ]; then
+        tmproot=/tmp
+    fi
+    mkdir -p $tmproot
+    export tmpdir=$(mktemp -d $tmproot/morph.XXXXXXXX)
+    export srcdir="$tmpdir/source"
+    export filedir="$path/files"
+    export patchdir="$path/patches"
+
+    mkdir -p $srcdir
+    mkdir -p $source_cache_dir
+    mkdir -p $package_out_dir
+}
+
+init_package () {    
+    export pkgdir="$tmpdir/out/$name"
+    mkdir -p $pkgdir
+}
+
+process_source () {
+    source_item=$1
+    
+    if [[ $source_item == "none" ]]; then
+        return
+    fi
+
+    protocol=$(echo $source_item | cut "-d:" -f1)
+    source_url=${source_item/$protocol:/}
+
+    loader=$MORPH_DIR/loaders/$protocol
+    if [[ -f $loader ]]; then
+        . $loader
+    else
+        die "No loader found for protocol $protocol"
+    fi
+
+    [[ $source_package ]] || source_package=$name
+
+    srcpath=$source_cache_dir/$source_package/
+    if [[ $returns_dir ]]; then
+        srcpath=$srcpath/$(basename $source_url)
+    fi
+
+    mkdir -p $srcpath
+    cd $srcpath
+
+    if check; then
+        update
+    else
+        init
+    fi
+    
+    cd $srcdir
+
+    if [[ $returns_dir ]]; then
+        info "Copying $srcpath..."
+        if is_function prepare_source; then
+            cd $srcpath
+            prepare_source
+            cd $srcdir
+        fi
+        if [ $deep_copy ]; then
+            shopt -s dotglob
+        fi
+        cp -r $srcpath/* .
+        if [ $deep_copy ]; then
+            shopt -u dotglob
+        fi
+        unpacked=1
+    else
+        source_file=$srcpath/$(basename $source_url)
+        info "Extracting $source_file..."
+        for unpacker in $(find $MORPH_DIR/unpackers -type f); do
+            . $unpacker
+            if check; then
+                debug "Using unpacker $unpacker"
+                unpack
+                unpacked=1
+                break
+            fi
+        done
+    fi
+    
+    if [[ -z $unpacked ]]; then
+        die "Failed to unpack!"
+    fi
+}
+
+is_function () {
+    declare -f $1 > /dev/null
+}
+
+do_autobuild () {
+    if [[ $IMPLICIT ]]; then
+        if [[ -d $name-$version ]]; then
+            cd $name-$version
+        fi
+    fi
+    if ! [[ -f $MORPH_DIR/builders/$1 ]]; then
+        die "No such builder: $1"
+    fi
+    . $MORPH_DIR/builders/$1
+    if check; then
+        debug "Using builder $1"
+        builder=$1
+        shift
+        eval "${builder}_keys=\"$@\" build" || false
+    else
+        false
+    fi
+}
+
+autobuild () {
+    if [[ $1 ]]; then
+        do_autobuild $@ && built=1
+    else
+        for builder in $(find $MORPH_DIR/builders -type f); do
+            if do_autobuild $(basename $builder); then
+                debug "Built using $builder"
+                built=1
+                break
+            fi
+        done
+    fi
+    if ! [[ "$built" ]]; then
+        die "Failed to autobuild!"
+    fi
+}
+
+set_flags () {
+    if [[ $target_arch == "$(uname -m)" ]]; then
+        toolchain_prefix=/usr
+        # leave the rest as is
+    elif [[ $target_arch == "env" ]]; then
+        # we're getting everything from the environment
+        true
+    else
+        . $MORPH_DIR/arch/$target_arch
+    fi
+    num_cpu_cores=$(cat /proc/cpuinfo | grep processor | wc -l)
+    if [[ -z $make_threads ]]; then
+        make_threads=$(($num_cpu_cores + 1))
+    fi
+    make_keys="-j$make_threads $make_keys"
+    export CC="$toolchain_prefix/bin/gcc"
+    export CXX="$toolchain_prefix/bin/g++"
+    if which ccache &> /dev/null; then
+        if [[ "$ccache" != "0" ]]; then
+            if [[ -z $ccache ]]; then
+                ccache="4G"
+            fi
+            if [[ -z $ccache_path ]]; then
+                ccache_path=~/.morph/ccache/
+            fi
+            export CCACHE_DIR=$ccache_path/$name/$target_arch
+            mkdir -p $CCACHE_DIR
+            ccache -M $ccache
+            export CC="ccache $CC"
+            export CXX="ccache $CXX"
+        fi
+    fi
+}
+
+load_package() {
+    local name
+    local source
+    local build
+    local subpackages
+    local depends
+    local optdepends
+    local remove_depends
+    
+    relativize() {
+        unset relpath
+        relpath=""
+        for item in $*; do
+            relpath+=${pkgdir}${item}
+            relpath+=" "
+        done
+        echo $relpath
+    }
+    
+    if [[ $1 ]] && is_function $1; then
+        $1
+    else  
+        if [ $FIRST ]; then
+            warn "Attempting to load an empty package name! Check your MORPHLING..."
+            return
+        else
+            export FIRST=1
+            set -e
+            info "Loading MOPRHLING..."
+            . $path/MORPHLING
+            set +e
+        fi
+    fi
+    
+    validate
+
+    init_package
+    
+    set_flags
+    
+    for item in $source; do
+        process_source $item
+    done
+   
+    cd $srcdir
+
+    if is_function build; then
+        if build; then
+            ok=1
+        fi
+    else
+        if IMPLICIT=1 autobuild $build; then
+            ok=1
+        fi
+    fi
+    if [[ $ok ]] ; then
+        if [[ -z $binaries_path ]]; then
+            binaries_path="/bin /sbin /lib /libexec /usr/bin /usr/sbin /usr/lib /usr/libexec"
+        fi
+        binaries_relpath=$(relativize $binaries_path)
+        python_path=$(relativize $python_path)
+        if [[ -z $IS_DEBUG ]]; then        
+            ( IS_DEBUG=1
+            eval "${name}-debug () {
+                name=${name}-dbg
+                description=\"Debug information for $name\"
+                depends=${name}
+
+                build () {
+                    info \"Stripping debug symbols...\"
+                    for item in \$(find $binaries_relpath -type f 2>/dev/null); do
+                        if file \$item | grep -q ELF; then
+                            info \"    Processing \$(basename \$item)\"
+                            cd \$(dirname \$item)
+                            item=\$(basename \$item)
+                            debugdir=\$(pwd | sed s@$pkgdir@\$pkgdir@g)
+                            mkdir -p \$debugdir
+                            objcopy --only-keep-debug \$item \$item.dbg
+                            objcopy --add-gnu-debuglink=\$item.dbg \$item
+                            strip -S --strip-unneeded \$item
+
+                            chmod -x \$item.dbg
+                            mv \$item.dbg \$debugdir
+                        fi
+                    done
+                    info \"Debug stripping complete!\"
+                }
+            }"
+            load_package ${name}-debug
+            unset IS_DEBUG )
+        fi
+        
+        export p_name=$name
+        export p_version=$version
+        export p_mbuild=$mbuild
+        export p_pkgdir=$pkgdir
+
+        for item in $subpackages; do
+            load_package $item
+        done
+
+        if [[ "$(find $pkgdir | wc -l)" == "1" ]]; then
+                warn "Empty package $name!"
+            else
+                if [[ $target ]] && [[ -f $MORPH_DIR/targets/$target ]]; then
+                    . $MORPH_DIR/targets/$target
+                else
+                    for target in $(find $MORPH_DIR/targets -type f); do
+                        unset check
+                        . $target
+                        if is_function check && check; then
+                            break
+                        fi
+                    done
+                fi
+
+                cd $pkgdir
+                if [[ -z $IS_DEBUG ]] && [[ -z $no_auto_depends ]]; then
+                    info "Generating dependencies..."
+
+                    # Dependency generation magic
+                    depfiles=""
+                    for item in $(find $MORPH_DIR/generators -type f); do
+                        info "Running $(basename $item)..."
+                        depfiles="$depfiles $(. $item)"
+                    done                    
+
+                    debug "Combining results..."
+                    depfiles=$(echo $depfiles | tr " " "\n" | grep -v "^[.]" | sort | uniq)
+                    for item in $depfiles; do
+                        dep=$(whichpkg $item)
+                        debug "        Found dependency file $item from package $dep"
+                        unset skip
+                        for item2 in $depends $remove_depends $optdepends $name; do
+                            if [[ $dep == $item2 ]]; then
+                                debug "    Dropping dependency: $dep as duplicate, removed or optional"
+                                skip=1
+                                break
+                            fi
+                        done
+                        [[ $skip ]] || { 
+                            depends="$depends $dep"
+                            info "    Found dependency: $dep"
+                        }
+                    done
+                fi
+
+                export package_size=$(du -d0 -b | grep -o "[0-9]*")
+                package
+        fi
+    else
+        warn "Failed to build package $name!"
+    fi
+}
+
+show_help() {
+cat <<HERE
+=== Options:
+ -t, --tree       -- use a build tree
+ -i, --install    -- install package after building
+ -h, --help       -- show help message
+ -s, --spawn      -- spawn a new MORPHLING here
+ -v, --verbose    -- +1 to debug level
+ -q, --quiet      -- -1 to debug level
+ --version        -- set version
+ --build          -- set build
+ --target-arch    -- set target arch (for cross)
+ --target         -- set target platform
+HERE
+exit 0
+}
+
+# Options parsing black magic
+argv=$(getopt -s bash --options "t:ihsvq" --longoptions tree:,install,help,spawn,version:,build:,target-arch:,verbose,quiet,target: -n Morph -- $@)
+eval set -- "$argv"
+
+declare -i positional_count=0
+positional_args=""
+
+while [[ $1 ]]; do
+    if [[ $positionals ]]; then
+        positional_count=$(($positional_count + 1))
+        positional_args="$1"
+    else
+        case $1 in
+            -t|--tree)
+                shift
+                build_tree=$(dirname $1)/$(basename $1)
+                ;;
+            -i|--install)
+                will_install=1
+                ;;
+            -h|--help)
+                show_help
+                ;;
+            -s|--spawn)
+                if [[ -f MORPHLING ]]; then
+                    die "There is a MORPHLING here already!"
+                fi
+                cp $MORPH_DIR/SAMPLE MORPHLING
+                exit 0
+                ;;
+            -v|--verbose)
+                MORPH_DEBUG=$((MORPH_DEBUG + 1))
+                ;;
+            -q|--quiet)
+                MORPH_DEBUG=$((MORPH_DEBUG - 1))
+                ;;
+            --version)
+                shift
+                # TODO bump magic
+                ;;
+            --build)
+                shift
+                # TODO bump magic
+                ;;
+            --target-arch)
+                shift
+                target_arch=$1
+                ;;
+            --target)
+                shift
+                target=$1
+                ;;
+            --)
+                positionals=1
+                ;;
+        esac
+    fi
+    shift
+done
+
+if [[ $build_tree ]]; then
+    if [[ $positional_count -gt 0 ]]; then
+        die "Can't have --tree and positional args at the same time"
+    else
+        tree_path=$(mktemp -d /tmp/morph-tree.XXXXXX)
+        cd $tree_path
+        tar xf $build_tree
+        path=$(pwd)
+    fi
+else
+    if [[ "$positional_count" -gt 1 ]]; then
+        die "Too many positional arguments!"
+    elif [[ "$positional_count" == "1" ]]; then
+        if [[ -d $positional_args ]]; then
+            path=$positional_args
+        else
+            die "$positional_args is not a directory!"
+        fi
+    else
+        path=$(pwd)
+    fi
+fi
+
+path=$(cd $path; pwd)
+
+if ! [[ -f $path/MORPHLING ]]; then
+    die "No MORPHLING found in $path!"
+fi
+
+init_global
+
+load_package
+
+rm -rf $tmpdir

@@ -1,0 +1,13 @@
+#!/bin/sh
+
+check () {
+    [[ -f $(basename ${source_url}) ]]
+}
+
+init () {
+    cp $source_url .
+}
+
+update () {
+    # nothing here
+}

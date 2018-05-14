@@ -1,0 +1,22 @@
+#!/bin/sh
+
+if [[ -z $python ]]; then
+    python=python2
+fi
+
+if [[ $python == python ]]; then
+    python=python2
+fi
+
+if [[ ! -f $python ]]; then
+    python=$(which $python)
+fi
+
+check () {
+    [[ -f setup.py ]] && [[ -f $python ]]
+}
+
+build () {
+    $python setup.py build
+    $python setup.py install --root=$pkgdir --optimize=1
+}

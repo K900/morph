@@ -1,0 +1,14 @@
+name=morph
+version=0.1
+
+description="Morph is WhateverTheNameLinux's new package building system"
+
+source="gh:AgiliaLinux/morph"
+
+tags="console,development,packaging,distro-specific,mpkg"
+
+build () {
+    mkdir -p $pkgdir/usr/{bin,share}
+    cp -R morph $pkgdir/usr/share
+    ln -s /usr/share/morph/morph $pkgdir/usr/bin/morph
+}

@@ -1,0 +1,55 @@
+name=firefox-hg
+version=$(curl https://hg.mozilla.org/mozilla-central/raw-file/tip/b2g/confvars.sh --silent | grep MOZ_APP_VERSION | cut "-d=" -f2)
+
+description="Mozilla Firefox, latest hg version"
+
+source="hg:http://hg.mozilla.org/mozilla-central"
+
+tags="web"
+
+build() {    
+
+    # Copy mozconfig
+    cp $filedir/mozconfig .mozconfig
+    
+    # Apply patches
+    for item in $(ls -1 $patchdir/*.patch); do
+        msg "Applying $item..."
+        patch -Np1 -i $item
+    done
+    
+    # Fix PRE_RELEASE_SUFFIX
+    sed -i '/^PRE_RELEASE_SUFFIX := ""/s/ ""//' browser/base/Makefile.in
+
+    # Flags
+    export LDFLAGS="$LDFLAGS -Wl,-rpath,/usr/lib/firefox"
+    export PYTHON=/usr/bin/python2
+    export MOZ_MAKE_FLAGS="$make_keys"
+
+    # Make
+    make -f client.mk build
+    make -j1 -f client.mk DESTDIR=$pkgdir install
+
+    # Install our config
+    install -Dm644 $filedir/vendor.js $pkgdir/usr/lib/firefox/defaults/preferences/vendor.js
+
+    # Icons
+    for i in 16 22 24 32 48 256; do
+        install -Dm644 browser/branding/official/default$i.png \
+        $pkgdir/usr/share/icons/hicolor/${i}x${i}/apps/firefox.png
+    done
+
+    # Desktop
+    install -Dm644 $srcdir/firefox.desktop $pkgdir/usr/share/applications/firefox.desktop
+
+    # Replace dictionaries and hyphen with system ones
+    rm -rf $pkgdir/usr/lib/firefox/{dictionaries,hyphenation}
+    ln -s /usr/share/hunspell $pkgdir/usr/lib/firefox/dictionaries
+    ln -s /usr/share/hyphen $pkgdir/usr/lib/firefox/hyphenation
+
+    # Remove dev stuff
+    rm -r $pkgdir/usr/{include,lib/firefox-devel,share/idl}
+
+    # Hack
+    ln -sf firefox $pkgdir/usr/lib/firefox/firefox-bin
+}

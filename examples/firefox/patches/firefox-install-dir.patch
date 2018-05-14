@@ -1,0 +1,14 @@
+diff -r 3c68fdd4f77a config/baseconfig.mk
+--- a/config/baseconfig.mk	Fri Sep 21 10:05:24 2012 -0400
++++ b/config/baseconfig.mk	Fri Sep 21 20:53:41 2012 +0400
+@@ -2,8 +2,8 @@
+ 
+ includedir := $(includedir)/$(MOZ_APP_NAME)-$(MOZ_APP_VERSION)
+ idldir = $(datadir)/idl/$(MOZ_APP_NAME)-$(MOZ_APP_VERSION)
+-installdir = $(libdir)/$(MOZ_APP_NAME)-$(MOZ_APP_VERSION)
+-sdkdir = $(libdir)/$(MOZ_APP_NAME)-devel-$(MOZ_APP_VERSION)
++installdir = $(libdir)/$(MOZ_APP_NAME)
++sdkdir = $(libdir)/$(MOZ_APP_NAME)-devel
+ DIST = $(DEPTH)/dist
+ 
+ # We do magic with OBJ_SUFFIX in config.mk, the following ensures we don't

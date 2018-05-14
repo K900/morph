@@ -1,0 +1,29 @@
+#!/bin/sh
+
+# color constants
+RED='\e[0;31m'
+BLUE='\e[0;34m'
+GREEN='\e[0;32m'
+RESET='\e[0m'
+
+warn () {
+    echo -e "[${RED}WARNING${RESET}] $1" 1>&2
+}
+
+die () {
+    echo -e "[${RED}FATAL${RESET}  ] ${RED}$1${RESET}" 1>&2
+    rm -rf $tmpdir
+    exit 1
+}
+
+info () {
+    if [[ $MORPH_DEBUG -gt 0 ]]; then
+        echo -e "[${BLUE}INFO${RESET}   ] $1" 1>&2
+    fi
+}
+
+debug () {
+    if [[ $MORPH_DEBUG -gt 1 ]]; then
+        echo -e "[${GREEN}DEBUG${RESET}  ] $1" 1>&2
+    fi
+}

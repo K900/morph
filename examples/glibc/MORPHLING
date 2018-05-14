@@ -1,0 +1,40 @@
+# Package metadata
+name=glibc
+version=2.15
+description="The GNU C library"
+source="git:git://sourceware.org/git/glibc.git"
+build() {
+    mkdir glibc-build
+    cd glibc-build
+    echo "slibdir=/lib" >> configparms
+
+    ../configure --prefix=/usr \
+      --libdir=/usr/lib --libexecdir=/usr/lib \
+      --with-headers=/usr/include \
+      --enable-add-ons=nptl,libidn \
+      --enable-kernel=2.6.32 \
+      --with-tls --with-__thread \
+      --enable-bind-now --without-gd \
+      --without-cvs --disable-profile \
+      --enable-multi-arch
+    
+    make $make_flags
+
+    # All the installing shamelessly stolen from Arch    
+    install -dm755 ${pkgdir}/usr/sbin
+    install -dm755 ${pkgdir}/usr/lib/locale
+    install -m644 ../nscd/nscd.conf ${pkgdir}/etc/nscd.conf
+    install -m755 ../locale-gen ${pkgdir}/usr/sbin
+    install -m644 ../posix/gai.conf ${pkgdir}/etc/gai.conf
+
+    sed -i -e 's/^\tserver-user/#\tserver-user/' ${pkgdir}/etc/nscd.conf
+
+    if [[ ${CARCH} = "x86_64" ]]; then
+        # fix for the linker
+        sed -i '/RTLDLIST/s%lib64%lib%' ${pkgdir}/usr/bin/ldd
+        # Comply with multilib binaries, they look for the linker in /lib64
+        mkdir ${pkgdir}/lib64
+        cd ${pkgdir}/lib64
+        ln -v -s ../lib/ld* .
+    fi
+}

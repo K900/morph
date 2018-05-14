@@ -1,0 +1,12 @@
+if [[ -z $python_path ]]; then
+    python_path="/usr/lib/python*"
+fi            
+python_relpath=$(relativize $python_path)
+if [[ -z "$python" ]]; then
+    python=python2
+fi
+for item in $(find $python_relpath 2>/dev/null); do
+    if file $item | grep -q Python; then
+        $python -m modulefinder $item | grep "^[mP]" | grep -v ~ | sed 's/.* //'
+    fi
+done

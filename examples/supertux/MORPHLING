@@ -1,0 +1,15 @@
+name=supertux2
+version=0.3.3
+
+description="SuperTux"
+
+source="http://supertux.googlecode.com/files/supertux-0.3.3.tar.bz2"
+
+tags="game,platforming,tux"
+
+binaries_path="/usr/bin"
+
+build () {
+    cd supertux-$version
+    autobuild cmake -DINSTALL_SUBDIR_BIN=bin
+}

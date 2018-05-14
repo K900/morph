@@ -1,0 +1,95 @@
+#!/bin/sh
+
+check () {
+    true
+    # TODO NOT IMPLEMENTED
+}
+
+whichpkg () {
+    true
+    # TODO NOT IMPLEMENTED
+}
+
+package () {
+    tmpdir=$(mktemp -d /tmp/moprh-xilitra.XXXX)
+    cd $pkgdir
+    [[ $MORPH_DEBUG -gt 1 ]] && v=v
+
+    info "Compressing data..."
+    tar cJ${v}f $tmpdir/data.tar.xz *
+
+    cd $tmpdir
+    info "Signing package..."
+    gpg -b data.tar.xz
+
+    info "Generating meta..."
+    mkdir meta
+    cd meta
+    if [[ -f ../data.tar.xz.sig ]]; then
+        mv ../data.tar.xz.sig .
+        gpg=1
+    fi
+cat > meta.json <<HERE
+{
+    "name": "$name",
+    "version": "$version",
+    "build": $mbuild,
+    "timestamp": $build_date,
+    "arch": "$arch",
+    "description": {
+        "C": "$description",
+    },
+    "license": "$license",
+    "size": "$package_size",
+    "tags": [
+HERE
+    for item in $tags; do
+        echo "\"$item\"," >> meta.json
+    done
+cat >> meta.json << HERE
+    ],
+    "depends": [
+HERE
+    for item in $depends; do
+        echo "\"$item\"," >> meta.json
+    done
+cat >> meta.json << HERE        
+    ],
+    "provides": "$provides",
+    "conflicts": [
+HERE
+    for item in $conflicts; do
+        echo "\"$item\"," >> meta.json
+    done
+cat >> meta.json << HERE
+    ],
+    "maintainer": {
+        "name": "$maintainer_name",
+        "email": "$maintainer_email"
+    },
+    "data_checksum": {
+HERE
+if [[ $gpg ]]; then
+    echo "        \"gpg\": true," >> meta.json
+fi
+cat >> meta.json << HERE
+        "md5": "$(md5sum $tmpdir/data.tar.xz)",
+        "sha1": "$(sha1sum $tmpdir/data.tar.xz)"
+    },
+    "API_VERSION": 1
+}
+HERE
+
+    tar cz${v}f $tmpdir/meta.tar.gz *
+    
+    cd $tmpdir
+    rm -rf meta
+    
+    pkgfile=$package_out_dir/$name-$version-$arch-$mbuild.xpkg
+
+    info "Creating $pkgfile..."
+    tar cJ${v}f $pkgfile meta.tar.gz data.tar.xz
+    info "$pkgfile created!"
+    info "Cleaning up..."
+    rm -rf $tmpdir
+}

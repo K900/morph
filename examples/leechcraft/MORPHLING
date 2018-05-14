@@ -1,0 +1,60 @@
+name=leechcraft-git
+version=9999
+
+description="Leechcraft"
+
+source="gh:0xd34df00d/leechcraft"
+
+tags="qt,browser,im,bittorrent,plugins"
+
+remove_depends="leechcraft"
+
+blacklist="eiskaltdcpp lemon vfscore transparentarch"
+
+prepare_source () {
+    if ! (which leechcraft &> /dev/null); then
+        warn "No core found, not building plugins!"
+    elif [ $NO_PLUGINS ]; then
+        warn "Not building plugins!"
+    else
+        cd src/plugins
+        plugs=$(find -maxdepth 1 -mindepth 1 -type d| sed s@./@@g)
+        new_plugs=""
+        for item in $plugs; do
+            unset black
+            for item2 in $blacklist; do
+                if [[ $item == $item2 ]]; then
+                    black=1
+                    debug "Skipping blacklisted plugin: $item"
+                fi
+            done
+            if ! [[ $black ]]; then
+                cd $item
+                desc=$(grep -r GetInfo * -A 3 -h | grep "\".*\"" -o | tail -n 1 | sed s/\"//g | head -n 1)
+                cd ..
+                eval "$item () {
+                    name=leechcraft-$item
+                    description=\"$desc\"
+                    source="none"                    
+                    build () {
+                        cd src/plugins/$item
+                        autobuild cmake -DENABLE_MEDIACALLS=True
+                    }
+                }"
+                new_plugs="$new_plugs $item"
+            fi
+        done
+        subpackages=$new_plugs
+        debug "Found plugins: $(echo $new_plugs | tr '\n' ' ')"
+        cd ../../
+    fi
+
+    version=$(git describe | cut "-d-" -f1).$(git describe | cut "-d-" -f2)
+}
+
+build () {
+    cd src
+    autobuild cmake -DWITH_PLUGINS=False
+    # HACK!
+    mv $pkgdir/usr/share/cmake $pkgdir/usr/share/cmake-2.8
+}

@@ -1,0 +1,46 @@
+#!/bin/sh
+
+check () {
+    which mpkg &> /dev/null
+}
+
+whichpkg () {
+    out=$(mpkg-which $1)
+    echo $out | tail -n $(expr $(echo $out | wc -l) - 2)
+}
+
+package () {
+    cd $pkgdir
+    mkdir install
+    cat > install/data.xml << XML
+<?xml version="1.0" encoding="utf-8"?>
+<package>
+<name>$name</name>
+<version>$version</version>
+<arch>$arch</arch>
+<build>$mbuild</build>
+<short_description></short_description>
+<dependencies/>
+<suggests/>
+<maintainer>
+	<name>$maintainer_name</name>
+	<email>$maintainer_email</email>
+</maintainer>
+<tags>
+XML
+
+    for item in $(echo $tags | tr "," "\n"); do
+        echo "<tag>$item</tag>" >> install/data.xml
+    done
+    echo "</tags></package>" >> install/data.xml
+
+# TODO FILL IN DEPS BY HAND
+
+    pkgfile=$package_out_dir/$name-$version-$arch-$mbuild.txz
+
+    info "Creating $pkgfile..."
+
+    [[ "$MORPH_DEBUG" -gt 0 ]] && v=v
+    tar cJf$v $pkgfile *
+    info "$pkgfile created!"
+}

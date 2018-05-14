@@ -1,0 +1,12 @@
+for item in $(find $binaries_relpath -executable 2>/dev/null); do
+    if file $item | grep -q ELF; then
+        debug "    Processing file $item..."
+        files=$(ldd $item | grep '=>.*' -o | cut '-d ' -f2)
+        for item2 in $files; do
+            echo $item2
+            debug "        Found dependency file: $item2"
+        done
+    fi
+done
+
+

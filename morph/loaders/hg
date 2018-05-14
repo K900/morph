@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# A hg loader for morph.
+# Usage: 
+# hg:<clone url>
+# If hg_branch is set, it will be used as a branch name.
+
+is_vcs=1
+returns_dir=1
+
+if [[ "${hg_branch}" ]] ; then
+    branch_arg=" -b ${hg_branch}"
+fi
+
+check () {
+    [[ -d ".hg" ]]
+}
+
+init () {
+    hg clone ${source_url} ${branch_arg} $(pwd)
+}
+
+update () {
+    hg pull
+    if [[ "${hg_branch}" ]]; then
+        current_branch=$(hg branch)
+    fi
+    if [[ "${current_branch}" != "${hg_branch}" ]]; then
+        hg update -C ${hg_branch} --clean
+    fi
+    hg update --clean
+}

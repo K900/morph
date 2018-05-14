@@ -1,0 +1,7 @@
+#!/bin/sh
+
+. $MORPH_DIR/loaders/file
+
+init () {
+    ln -s $source_url $(basename $source_url)
+}
